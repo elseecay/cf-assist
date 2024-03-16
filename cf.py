@@ -767,7 +767,7 @@ def work_rank(args):
     elif percent <= 3.0:
         color = "yellow"
     else:
-        color = ["blue", "cyan", "green", ["white"] * 20][int(percent) // 10]
+        color = ["blue", "cyan", "green", *(["white"] * 20)][int(percent) // 10]
     print_c("white", f"{rank}", end=" / ")
     print_c(color, f"{percent:.2f}%")
     print_c("white", f"{pcount}")
