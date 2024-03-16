@@ -112,10 +112,10 @@ class Compiler:
 class Problem:
 
     # def generate_input(print: Callable)
-    generate_input: Callable
+    generate_input: Callable[[Callable], None]
 
     # def checker(input_content: str, output_content: str, expected_content: str) -> Optional[str]
-    checker: Callable
+    checker: Callable[[str, str, str], str]
 
     @staticmethod
     def import_function(name: str, pcount: int, default=None):
@@ -547,8 +547,11 @@ def call_checker(input_file: Path, output_file: Path, expected_file: Path) -> Op
         in_content = f.read()
     with open(output_file, "r") as f:
         out_content = f.read()
-    with open(expected_file, "r") as f:
-        out_correct_content = f.read()
+    if output_file == expected_file:
+        out_correct_content = out_content
+    else:
+        with open(expected_file, "r") as f:
+            out_correct_content = f.read()
     return Problem.checker(in_content, out_content, out_correct_content)
 
 
@@ -594,7 +597,38 @@ def work_compare_solution():
     work_compare()
 
 
-def work_generate():
+def work_gendbg_input(args):
+    if not hasattr(Problem, "generate_input"):
+        Problem.import_function("generate_input", 1)
+    with open(INPUT_FILE, "w") as f:
+        file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
+        Problem.generate_input(file_print)
+    work_execute(correct_solution=False)
+
+
+def work_gendbg_checker(args):
+    if not hasattr(Problem, "generate_input"):
+        Problem.import_function("generate_input", 1)
+    if not hasattr(Problem, "checker"):
+        Problem.import_function("checker", 3)
+    start = datetime.now(timezone.utc)
+    for counter in range(1, 2 ** 20):
+        print_c("white", counter, end=" " if counter % 25 > 0 else "\n", flush=True)
+        with open(INPUT_FILE, "w") as f:
+            file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
+            Problem.generate_input(file_print)
+        execute(correct_solution=False)
+        err = call_checker(INPUT_FILE, OUTPUT_FILE, OUTPUT_FILE)
+        if err:
+            print("\n", err, sep="")
+            print_c("green", "Test generated!")
+            return
+        if counter == 250:
+            per_test_ms = 1000 * (datetime.now(timezone.utc) - start).total_seconds() / counter
+            print_c("blue", f"\n Per test: {per_test_ms} ms \n")
+
+
+def work_gendbg_solution(args):
     if not hasattr(Problem, "generate_input"):
         Problem.import_function("generate_input", 1)
     start = datetime.now(timezone.utc)
@@ -612,14 +646,6 @@ def work_generate():
         if counter == 250:
             per_test_ms = 1000 * (datetime.now(timezone.utc) - start).total_seconds() / counter
             print_c("blue", f"\n Per test: {per_test_ms} ms \n")
-
-
-def work_generate_input(args):
-    if not hasattr(Problem, "generate_input"):
-        Problem.import_function("generate_input", 1)
-    with open(INPUT_FILE, "w") as f:
-        file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
-        Problem.generate_input(file_print)
 
 
 def work_request_sample(args):
@@ -850,9 +876,6 @@ def do_work(args: Namespace):
     if args.rank:
         work_rank(args)
         return
-    if args.generate_input:
-        work_generate_input(args)
-        return
     if args.problem is not None:
         work_set_problem(args)
     if args.submit:
@@ -860,7 +883,8 @@ def do_work(args: Namespace):
         return
     if args.sample is not None:
         work_request_sample(args)
-    if len(sys.argv) == 1 or args.build or args.execute or args.compare or args.compare_solution or args.generate:
+    gendbg = args.gendbg_input or args.gendbg_checker or args.gendbg_solution
+    if len(sys.argv) == 1 or args.build or args.execute or args.compare or args.compare_solution or gendbg:
         work_compile(args)
     if args.execute:
         work_execute()
@@ -868,8 +892,12 @@ def do_work(args: Namespace):
         work_compare()
     if args.compare_solution:
         work_compare_solution()
-    if args.generate:
-        work_generate()
+    if args.gendbg_input:
+        work_gendbg_input(args)
+    if args.gendbg_checker:
+        work_gendbg_checker(args)
+    if args.gendbg_solution:
+        work_gendbg_solution(args)
 
 
 def parse_args() -> Namespace:
@@ -884,8 +912,9 @@ def parse_args() -> Namespace:
     argparser.add_argument("-q", "--rank", action="store_true", help="Show rank for current contest")
     argparser.add_argument("-w", "--settings", action="store_true", help="Show current settings")
     argparser.add_argument("--compare-solution", action="store_true", help="Compare solution with correct one on current input")
-    argparser.add_argument("--generate", action="store_true", help="Try generate bad test")
-    argparser.add_argument("--generate-input", action="store_true", help="Generate input")
+    argparser.add_argument("--gendbg-input", action="store_true", help="Generate input and run")
+    argparser.add_argument("--gendbg-checker", action="store_true", help="Test solution with a checker")
+    argparser.add_argument("--gendbg-solution", action="store_true", help="Test solution with correct one")
     argparser.add_argument("--contest", type=int, nargs="?", default=None, const=0, metavar="ID", help="Select contest")
     argparser.add_argument("--check-auth", action="store_true", help="Check authorization")
     argparser.add_argument("--set-auth", action="store_true", help="Authorize at codeforces")
