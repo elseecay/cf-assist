@@ -614,6 +614,14 @@ def work_generate():
             print_c("blue", f"\n Per test: {per_test_ms} ms \n")
 
 
+def work_generate_input(args):
+    if not hasattr(Problem, "generate_input"):
+        Problem.import_function("generate_input", 1)
+    with open(INPUT_FILE, "w") as f:
+        file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
+        Problem.generate_input(file_print)
+
+
 def work_request_sample(args):
     contest = Settings.instance.get_contest()
     if contest is None:
@@ -650,13 +658,17 @@ def work_submit_solution(args):
     request_submit_problem(contest, problem, cf_compiler, code, cookies)
     print("solution submitted")
     login = Settings.instance.get_login()
+    prev_tests_passed = -1
     while True:
         sub = Api.instance.request_last_submission(login, contest)
         sub_time = datetime.fromtimestamp(sub.creation_timestamp, timezone.utc)
         if sub_time < request_time:
             print("Getting submission status...")
             continue
-        print_c("yellow", f"Testing... {sub.tests_passed}")
+        if sub.tests_passed == prev_tests_passed:
+            continue
+        prev_tests_passed = sub.tests_passed
+        print_c("yellow", f"Testing... {sub.tests_passed + 1}")
         if sub.verdict is None or sub.verdict == "TESTING":
             continue
         break
@@ -838,6 +850,9 @@ def do_work(args: Namespace):
     if args.rank:
         work_rank(args)
         return
+    if args.generate_input:
+        work_generate_input(args)
+        return
     if args.problem is not None:
         work_set_problem(args)
     if args.submit:
@@ -870,6 +885,7 @@ def parse_args() -> Namespace:
     argparser.add_argument("-w", "--settings", action="store_true", help="Show current settings")
     argparser.add_argument("--compare-solution", action="store_true", help="Compare solution with correct one on current input")
     argparser.add_argument("--generate", action="store_true", help="Try generate bad test")
+    argparser.add_argument("--generate-input", action="store_true", help="Generate input")
     argparser.add_argument("--contest", type=int, nargs="?", default=None, const=0, metavar="ID", help="Select contest")
     argparser.add_argument("--check-auth", action="store_true", help="Check authorization")
     argparser.add_argument("--set-auth", action="store_true", help="Authorize at codeforces")
