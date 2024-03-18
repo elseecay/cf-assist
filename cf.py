@@ -745,7 +745,7 @@ def work_set_contest(args):
 
 
 def work_set_problem(args):
-    regexp = re.compile(r"[A-Z][0-9]*")
+    regexp = re.compile(r"[A-Z][0-9]{0,1}")
     p = args.problem.upper()
     if regexp.fullmatch(p) is None:
         raise Error("Invalid problem name")
