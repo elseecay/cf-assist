@@ -574,13 +574,18 @@ def work_compile(args):
         Settings.instance.set_exe_info(src_mtime, args.release)
 
 
-def work_execute(correct_solution=False):
+def work_execute(args):
     begin = datetime.now(timezone.utc)
     print("executing...")
-    execute(correct_solution)
+    execute(correct_solution=False)
     end = datetime.now(timezone.utc)
     milliseconds = int(1000 * (end - begin).total_seconds())
     print_c("white", f"{milliseconds} ms")
+    if args.output:
+        with open(OUTPUT_FILE, "r") as f:
+            content = f.read()
+        print_c("white", "Output:")
+        print(content)
 
 
 def work_compare():
@@ -605,7 +610,6 @@ def work_gendbg_input(args):
     with open(INPUT_FILE, "w") as f:
         file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
         Problem.generate_input(file_print)
-    work_execute(correct_solution=False)
 
 
 def work_gendbg_checker(args):
@@ -889,18 +893,20 @@ def do_work(args: Namespace):
     gendbg = args.gendbg_input or args.gendbg_checker or args.gendbg_solution
     if len(sys.argv) == 1 or args.build or args.execute or args.compare or args.compare_solution or gendbg:
         work_compile(args)
+    if args.gendbg_checker:
+        work_gendbg_checker(args)
+        return
+    if args.gendbg_solution:
+        work_gendbg_solution(args)
+        return
+    if args.gendbg_input:
+        work_gendbg_input(args)
     if args.execute:
-        work_execute()
+        work_execute(args)
     if args.compare:
         work_compare()
     if args.compare_solution:
         work_compare_solution()
-    if args.gendbg_input:
-        work_gendbg_input(args)
-    if args.gendbg_checker:
-        work_gendbg_checker(args)
-    if args.gendbg_solution:
-        work_gendbg_solution(args)
 
 
 def parse_args() -> Namespace:
@@ -914,6 +920,7 @@ def parse_args() -> Namespace:
     argparser.add_argument("-t", "--sample", type=int, metavar="I", help="Get test sample")
     argparser.add_argument("-q", "--rank", action="store_true", help="Show rank for current contest")
     argparser.add_argument("-w", "--settings", action="store_true", help="Show current settings")
+    argparser.add_argument("-o", "--output", action="store_true", help="Show output after execution")
     argparser.add_argument("--compare-solution", action="store_true", help="Compare solution with correct one on current input")
     argparser.add_argument("--gendbg-input", action="store_true", help="Generate input and run")
     argparser.add_argument("--gendbg-checker", action="store_true", help="Test solution with a checker")
