@@ -745,9 +745,10 @@ def work_set_contest(args):
 
 
 def work_set_problem(args):
+    regexp = re.compile(r"[A-Z][0-9]*")
     p = args.problem.upper()
-    if len(p) != 1 or p not in string.ascii_uppercase:
-        raise Error("Problem name should be one of ascii letters")
+    if regexp.fullmatch(p) is None:
+        raise Error("Invalid problem name")
     Settings.instance.set_problem(p)
     print_c("blue", f"Problem selected {p}")
 
