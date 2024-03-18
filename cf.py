@@ -470,9 +470,11 @@ def request_sample_test(contest_id: int, problem: str, index: int) -> SampleTest
         raise RequestError("sample block not found", response)
     if index < 0 or index * 2 + 1 >= len(sample_node.contents):
         raise RequestError("No such sample index", response)
-    input_elements = sample_node.contents[2 * index].find_all("div", {"class": "test-example-line"})
-    output_element = sample_node.contents[2 * index + 1].find("pre")
-    return SampleTest("\n".join(node.text.lstrip() for node in input_elements), output_element.text.lstrip())
+    input_block = sample_node.contents[2 * index].find("pre")
+    output_block = sample_node.contents[2 * index + 1].find("pre")
+    input_text = "\n".join(e.text.strip() for e in input_block.contents if len(e.text) > 0)
+    output_text = "\n".join(e.text.strip() for e in output_block.contents if len(e.text) > 0)
+    return SampleTest(input_text, output_text)
 
 
 def request_participants_count(contest_id: int, unofficial: bool) -> int:
