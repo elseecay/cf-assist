@@ -583,9 +583,10 @@ def work_execute(args):
     print_c("white", f"{milliseconds} ms")
     if args.output:
         with open(OUTPUT_FILE, "r") as f:
-            content = f.read()
+            content = f.read().split("\n")
         print_c("white", "Output:")
-        print(content)
+        for line in content:
+            print(" " * 4, line, sep="")
 
 
 def work_compare():
