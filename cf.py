@@ -563,7 +563,7 @@ def work_compile(args):
         raise Error("Compiler not selected")
     src_mtime = int(os.stat(SOURCE_FILE).st_mtime)
     exe_info = Settings.instance.get_exe_info()
-    if args.build or not EXECUTABLE_FILE.exists() or exe_info is None or exe_info[0] != src_mtime or exe_info[1] != args.release:
+    if args.build or not EXECUTABLE_FILE.exists() or exe_info is None or exe_info[0] != src_mtime or (args.release and not exe_info[1]):
         command = compiler.release_command if args.release else compiler.debug_command
         try:
             subprocess.run(command, check=True)
