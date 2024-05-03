@@ -282,12 +282,13 @@ class Api:
         self.secret = secret
 
     def request_actual_contests(self) -> List[Contest]:
-        all_contests = self.request("contest.list", {"gym": "false"})
+        all_contests, _ = self.request("contest.list", {"gym": "false"})
         not_finished = filter(lambda e: e["phase"] in ("BEFORE", "CODING"), all_contests)
         return list(Contest(e["name"], e["id"], datetime.fromtimestamp(e["startTimeSeconds"])) for e in not_finished)
 
     def request_last_submission(self, login: str, contest: int) -> Submission:
-        sub = self.request("contest.status", {"contestId": contest, "handle": login, "from": "1", "count": "1"})[0]
+        response, _ = self.request("contest.status", {"contestId": contest, "handle": login, "from": "1", "count": "1"})
+        sub = response[0]
         result = Submission(sub["contestId"], sub["problem"]["index"], sub["passedTestCount"], sub["creationTimeSeconds"])
         if "verdict" in sub:
             result.verdict = sub["verdict"]
@@ -299,12 +300,12 @@ class Api:
         params = {"contestId": str(contest_id), "handles": f"{login};"}
         if unofficial:
             params["showUnofficial"] = "true"
-        r = self.request("contest.standings", params)
+        r, prepared = self.request("contest.standings", params)
         if len(r["rows"]) == 0:
-            raise RequestError("Empty result returned")
+            raise RequestError("Standings, len(rows) == 0", prepared)
         return int(r["rows"][0]["rank"])
     
-    def request(self, method_name: str, params: Dict[str, str]) -> Any:
+    def request(self, method_name: str, params: Dict[str, str]) -> Tuple[Any, requests.PreparedRequest]:
         next_request_time = self.last_request_time + Api.WAIT_INTERVAL
         now = datetime.now(timezone.utc)
         if now < next_request_time:
@@ -317,7 +318,7 @@ class Api:
         result = json.loads(response.text)
         if result["status"] != "OK":
             raise RequestError("API response status is not OK", response)
-        return result["result"]
+        return result["result"], response.request
     
     def calc_request_params(self, method_name: str, params: Dict[str, str]) -> dict:
         params = params.copy()
@@ -498,13 +499,13 @@ def default_checker(_i: str, out_content: str, expected_content: str) -> Optiona
     del expected_content
     len_min = min(len(out_strings), len(expected_strings))
     len_max = max(len(out_strings), len(expected_strings))
-    len_diff = len_max - len_min
     max_strings = out_strings if len_max == len(out_strings) else expected_strings
     for i in range(len_min):
         if out_strings[i] != expected_strings[i]:
             return f"error line: {i + 1}"
-    if len_diff > 1 or (len_diff == 1 and len(max_strings[-1]) > 0):
-        return f"extra lines: {len(out_strings) - len(expected_strings)}"
+    for i in range(len_min, len_max):
+        if len(max_strings[i]) != 0:
+            return f"extra line non-empty: {i + 1}"
     return None
 
 
