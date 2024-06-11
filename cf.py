@@ -612,6 +612,8 @@ def work_gendbg_input(args):
     with open(INPUT_FILE, "w") as f:
         file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
         Problem.generate_input(file_print)
+    print("executing...")
+    execute()
 
 
 def work_gendbg_checker(args):
