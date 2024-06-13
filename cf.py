@@ -612,8 +612,26 @@ def work_gendbg_input(args):
     with open(INPUT_FILE, "w") as f:
         file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
         Problem.generate_input(file_print)
-    print("executing...")
-    execute()
+    work_execute(args)
+
+
+def work_gendbg_runtime(args):
+    if not hasattr(Problem, "generate_input"):
+        Problem.import_function("generate_input", 1)
+    start = datetime.now(timezone.utc)
+    for counter in range(1, 2 ** 20):
+        print_c("white", counter, end=" " if counter % 25 > 0 else "\n", flush=True)
+        with open(INPUT_FILE, "w") as f:
+            file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
+            Problem.generate_input(file_print)
+        try:
+            execute()
+        except ExecutionError:
+            print_c("green", "\nTest generated!")
+            return
+        if counter == 250:
+            per_test_ms = 1000 * (datetime.now(timezone.utc) - start).total_seconds() / counter
+            print_c("blue", f"\n Per test: {per_test_ms} ms \n")
 
 
 def work_gendbg_checker(args):
@@ -894,23 +912,27 @@ def do_work(args: Namespace):
         return
     if args.sample is not None:
         work_request_sample(args)
-    gendbg = args.gendbg_input or args.gendbg_checker or args.gendbg_solution
+    gendbg = args.gendbg_input or args.gendbg_runtime or args.gendbg_checker or args.gendbg_solution
     if len(sys.argv) == 1 or args.build or args.execute or args.compare or args.compare_solution or gendbg:
         work_compile(args)
-    if args.gendbg_checker:
-        work_gendbg_checker(args)
-        return
-    if args.gendbg_solution:
-        work_gendbg_solution(args)
-        return
-    if args.gendbg_input:
-        work_gendbg_input(args)
     if args.execute:
         work_execute(args)
     if args.compare:
         work_compare()
     if args.compare_solution:
         work_compare_solution()
+    if args.gendbg_input:
+        work_gendbg_input(args)
+        return
+    if args.gendbg_runtime:
+        work_gendbg_runtime(args)
+        return
+    if args.gendbg_checker:
+        work_gendbg_checker(args)
+        return
+    if args.gendbg_solution:
+        work_gendbg_solution(args)
+        return
 
 
 def parse_args() -> Namespace:
@@ -927,6 +949,7 @@ def parse_args() -> Namespace:
     argparser.add_argument("-o", "--output", action="store_true", help="Show output after execution")
     argparser.add_argument("--compare-solution", action="store_true", help="Compare solution with correct one on current input")
     argparser.add_argument("--gendbg-input", action="store_true", help="Generate input and run")
+    argparser.add_argument("--gendbg-runtime", action="store_true", help="Test solution for runtime error")
     argparser.add_argument("--gendbg-checker", action="store_true", help="Test solution with a checker")
     argparser.add_argument("--gendbg-solution", action="store_true", help="Test solution with correct one")
     argparser.add_argument("--contest", type=int, nargs="?", default=None, const=0, metavar="ID", help="Select contest")
