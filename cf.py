@@ -111,36 +111,82 @@ class Compiler:
 
 class Problem:
 
-    # def generate_input(print: Callable)
-    generate_input: Callable[[Callable], None]
+    # def generate_input()
+    generate_input: Callable[[], None] = None
 
-    # def checker(input_content: str, output_content: str, expected_content: str) -> Optional[str]
-    checker: Callable[[str, str, str], str]
+    # def checker(icontent: str, ocontent: str, econtent: str) -> Optional[str]
+    checker: Callable[[str, str, str], str] = None
 
     @staticmethod
-    def import_function(name: str, pcount: int, default=None):
+    def call_generate_input():
+        if Problem.generate_input is None:
+            raise ProblemError(Problem.generate_input_error)
         try:
-            problem = importlib.import_module("problem")
+            f = open(INPUT_FILE, "w")
+            fd_file = f.fileno()
+            fd_out = sys.stdout.fileno()
+            fd_out2 = os.dup(fd_out)
+            os.dup2(fd_file, fd_out)
+            Problem.generate_input()
+            os.close(fd_out)
+            os.dup2(fd_out2, fd_out)
+            os.close(fd_out2)
+        finally:
+            if "f" in locals():
+                f.close()
+    
+    @staticmethod
+    def call_checker(input_file: Path, output_file: Path, expected_file: Path) -> Optional[str]:
+        if Problem.checker is None:
+            raise ProblemError(Problem.checker_error)
+        with open(input_file, "r") as f:
+            in_content = f.read()
+        with open(output_file, "r") as f:
+            out_content = f.read()
+        if output_file == expected_file:
+            out_correct_content = out_content
+        else:
+            with open(expected_file, "r") as f:
+                out_correct_content = f.read()
+        return Problem.checker(in_content, out_content, out_correct_content)
+    
+    @staticmethod
+    def import_function(name: str, default=None):
+        assert name in Problem.__annotations__
+        setattr(Problem, f"{name}_error", None)
+        try:
+            module = importlib.import_module("problem")
         except Exception as e:
             if default is None:
-                raise ProblemError(str(e)) from None
-            setattr(Problem, name, default)
+                setattr(Problem, f"{name}_error", str(e))
+            else:
+                setattr(Problem, name, default)
             return
-        if not hasattr(problem, name):
+        if not hasattr(module, name):
             if default is None:
-                raise ProblemError(f"problem.{name} - not found")
-            setattr(Problem, name, default)
+                setattr(Problem, f"{name}_error", "not found")
+            else:
+                setattr(Problem, name, default)
             return
-        func = getattr(problem, name)
+        pcount = len(Problem.__annotations__[name].__args__)
+        func = getattr(module, name)
         if not callable(func):
-            raise ProblemError(f"problem.{name} - is not callable")
+            setattr(Problem, f"{name}_error", "not callable")
+            return
         params = inspect.signature(func).parameters
         if len(params) != pcount:
-            raise ProblemError(f"problem.{name} - invalid signature")
+            setattr(Problem, f"{name}_error", "invalid signature")
+            return
         for _, p in params.items():
             if p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.VAR_KEYWORD):
-                raise ProblemError(f"problem.{name} - invalid signature")
+                setattr(Problem, f"{name}_error", "invalid signature")
+                return
         setattr(Problem, name, func)
+
+    @staticmethod
+    def import_all():
+        Problem.import_function("generate_input")
+        Problem.import_function("checker", default=default_checker)    
 
 
 class Settings:
@@ -404,7 +450,7 @@ def send_request(method: str, url: str, *, params: dict = None, data: dict = Non
         if need_close:
             session.close()
     if response.status_code != 200:
-        raise RequestError("Status code is not 200", response)
+        raise RequestError("Bad response status", response)
     return response
     
 
@@ -468,7 +514,7 @@ def request_sample_test(contest_id: int, problem: str, index: int) -> SampleTest
     soup = bs4.BeautifulSoup(response.text, "lxml")
     sample_node = soup.find("div", {"class": "sample-test"})
     if not sample_node:
-        raise RequestError("sample block not found", response)
+        raise RequestError("Sample block not found", response)
     if index < 0 or index * 2 + 1 >= len(sample_node.contents):
         raise RequestError("No such sample index", response)
     input_block = sample_node.contents[2 * index].find("pre")
@@ -535,27 +581,12 @@ def execute(correct_solution=False):
     
 
 def compare(need_exec=True) -> Optional[str]:
-    if not hasattr(Problem, "checker"):
-        Problem.import_function("checker", 3, default=default_checker)
     try:
         if need_exec:
             execute()
     except ExecutionError:
         return "Runtime error"
-    return call_checker(INPUT_FILE, OUTPUT_FILE, EXPECTED_FILE)
-
-
-def call_checker(input_file: Path, output_file: Path, expected_file: Path) -> Optional[str]:
-    with open(input_file, "r") as f:
-        in_content = f.read()
-    with open(output_file, "r") as f:
-        out_content = f.read()
-    if output_file == expected_file:
-        out_correct_content = out_content
-    else:
-        with open(expected_file, "r") as f:
-            out_correct_content = f.read()
-    return Problem.checker(in_content, out_content, out_correct_content)
+    return Problem.call_checker(INPUT_FILE, OUTPUT_FILE, EXPECTED_FILE)
 
 
 def work_compile(args):
@@ -607,23 +638,15 @@ def work_compare_solution():
 
 
 def work_gendbg_input(args):
-    if not hasattr(Problem, "generate_input"):
-        Problem.import_function("generate_input", 1)
-    with open(INPUT_FILE, "w") as f:
-        file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
-        Problem.generate_input(file_print)
+    Problem.call_generate_input()
     work_execute(args)
 
 
 def work_gendbg_runtime(args):
-    if not hasattr(Problem, "generate_input"):
-        Problem.import_function("generate_input", 1)
     start = datetime.now(timezone.utc)
     for counter in range(1, 2 ** 20):
         print_c("white", counter, end=" " if counter % 25 > 0 else "\n", flush=True)
-        with open(INPUT_FILE, "w") as f:
-            file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
-            Problem.generate_input(file_print)
+        Problem.call_generate_input()
         try:
             execute()
         except ExecutionError:
@@ -635,18 +658,14 @@ def work_gendbg_runtime(args):
 
 
 def work_gendbg_checker(args):
-    if not hasattr(Problem, "generate_input"):
-        Problem.import_function("generate_input", 1)
-    if not hasattr(Problem, "checker"):
-        Problem.import_function("checker", 3)
+    if Problem.checker is default_checker:
+        raise ProblemError("problem.checker - not defined")
     start = datetime.now(timezone.utc)
     for counter in range(1, 2 ** 20):
         print_c("white", counter, end=" " if counter % 25 > 0 else "\n", flush=True)
-        with open(INPUT_FILE, "w") as f:
-            file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
-            Problem.generate_input(file_print)
+        Problem.call_generate_input()
         execute(correct_solution=False)
-        err = call_checker(INPUT_FILE, OUTPUT_FILE, OUTPUT_FILE)
+        err = Problem.call_checker(INPUT_FILE, OUTPUT_FILE, OUTPUT_FILE)
         if err:
             print("\n", err, sep="")
             print_c("green", "Test generated!")
@@ -657,14 +676,10 @@ def work_gendbg_checker(args):
 
 
 def work_gendbg_solution(args):
-    if not hasattr(Problem, "generate_input"):
-        Problem.import_function("generate_input", 1)
     start = datetime.now(timezone.utc)
     for counter in range(1, 2 ** 20):
         print_c("white", counter, end=" " if counter % 25 > 0 else "\n", flush=True)
-        with open(INPUT_FILE, "w") as f:
-            file_print = lambda *args, **kwargs: print(*args, **kwargs, file=f)
-            Problem.generate_input(file_print)
+        Problem.call_generate_input()
         execute(correct_solution=True)
         os.rename(OUTPUT_FILE, EXPECTED_FILE)
         err = compare()
@@ -878,6 +893,7 @@ def work_show_settings(args):
 
 
 def do_work(args: Namespace):
+    Problem.import_all()
     Settings.create_instance()
     if api := Settings.instance.get_api():
         Api.create_instance(api[0], api[1])
@@ -940,7 +956,7 @@ def parse_args() -> Namespace:
     argparser.add_argument("-b", "--build", action="store_true", help="Build executable")
     argparser.add_argument("-r", "--release", action="store_true", help="Build release")
     argparser.add_argument("-e", "--execute", action="store_true", help="Run code")
-    argparser.add_argument("-c", "--compare", action="store_true", help="Compare output with correct one")
+    argparser.add_argument("-c", "--compare", action="store_true", help="Compare output with correct one (call checker)")
     argparser.add_argument("-p", "--problem", type=str, metavar="P", help="Select problem")
     argparser.add_argument("-s", "--submit", action="store_true", help="Submit current problem")
     argparser.add_argument("-t", "--sample", type=int, metavar="I", help="Get test sample")
@@ -973,6 +989,7 @@ def main():
         print("Compilation string:", e.compilation_string)
         return
     except ProblemError as e:
+        print()
         print_c("red", "problem.py error")
         print(e)
         return
