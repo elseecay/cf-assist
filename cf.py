@@ -123,6 +123,7 @@ class Problem:
             raise ProblemError(Problem.generate_input_error)
         try:
             f = open(INPUT_FILE, "w")
+            sys.stdout.flush()
             fd_file = f.fileno()
             fd_out = sys.stdout.fileno()
             fd_out2 = os.dup(fd_out)
@@ -168,7 +169,7 @@ class Problem:
             else:
                 setattr(Problem, name, default)
             return
-        pcount = len(Problem.__annotations__[name].__args__)
+        pcount = len(Problem.__annotations__[name].__args__) - 1
         func = getattr(module, name)
         if not callable(func):
             setattr(Problem, f"{name}_error", "not callable")
@@ -964,7 +965,7 @@ def parse_args() -> Namespace:
     argparser.add_argument("-w", "--settings", action="store_true", help="Show current settings")
     argparser.add_argument("-o", "--output", action="store_true", help="Show output after execution")
     argparser.add_argument("--compare-solution", action="store_true", help="Compare solution with correct one on current input")
-    argparser.add_argument("--gendbg-input", action="store_true", help="Generate input and run")
+    argparser.add_argument("--gendbg-input", action="store_true", help="Generate input and run once")
     argparser.add_argument("--gendbg-runtime", action="store_true", help="Test solution for runtime error")
     argparser.add_argument("--gendbg-checker", action="store_true", help="Test solution with a checker")
     argparser.add_argument("--gendbg-solution", action="store_true", help="Test solution with correct one")
