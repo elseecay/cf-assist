@@ -1,0 +1,5 @@
+setuptools
+selenium
+undetected_chromedriver
+bs4
+lxml

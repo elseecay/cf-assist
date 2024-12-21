@@ -12,18 +12,18 @@ import json
 import time
 import string
 import re
+import socket
+import pickle
+import argparse
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from argparse import ArgumentParser, HelpFormatter, Namespace
 from pathlib import Path
 from typing import Optional, Callable, Dict, List, Any, Tuple, Union
-from enum import IntEnum
+from enum import StrEnum
 
 import colorama
 import requests
-import bs4
-import lxml
 
 
 ROOT = Path(__file__).parent.absolute()
@@ -37,6 +37,7 @@ SOURCE_FILE_BACKUP = Path(ROOT, "main.cpp.backup")
 
 
 TIMEOUT_DEFAULT = (20.0, 60.0)
+BROWSER_PORT = 58610
 
 
 class Error(Exception):
@@ -96,11 +97,10 @@ class Submission:
     mem_mb: Optional[int] = None
 
 
-class CodeforcesCompiler(IntEnum):
-    CLANG17 = 52
-    GPP17 = 54
-    CLANG20 = 80
-    GPP20 = 89
+class CodeforcesCompiler(StrEnum):
+    GPP17 = "54"
+    GPP20 = "89"
+    GPP23 = "91"
 
 
 @dataclass
@@ -121,20 +121,18 @@ class Problem:
     def call_generate_input():
         if Problem.generate_input is None:
             raise ProblemError(Problem.generate_input_error)
-        try:
-            f = open(INPUT_FILE, "w")
-            sys.stdout.flush()
-            fd_file = f.fileno()
-            fd_out = sys.stdout.fileno()
-            fd_out2 = os.dup(fd_out)
-            os.dup2(fd_file, fd_out)
-            Problem.generate_input()
-            os.close(fd_out)
-            os.dup2(fd_out2, fd_out)
-            os.close(fd_out2)
-        finally:
-            if "f" in locals():
-                f.close()
+        sys.stdout.flush()
+        f = open(INPUT_FILE, "w")
+        fd_file = f.fileno()
+        fd_out = sys.stdout.fileno()
+        fd_out2 = os.dup(fd_out)
+        os.dup2(fd_file, fd_out)
+        Problem.generate_input()
+        sys.stdout.flush()
+        os.close(fd_out)
+        f.close()
+        os.dup2(fd_out2, fd_out)
+        os.close(fd_out2)
     
     @staticmethod
     def call_checker(input_file: Path, output_file: Path, expected_file: Path) -> Optional[str]:
@@ -227,12 +225,6 @@ class Settings:
             return None
         return int(c)
     
-    def set_login(self, login: str):
-        self.update("login", login)
-
-    def get_login(self) -> Optional[str]:
-        return self.get("login")
-    
     def set_api(self, key: str, secret: str):
         self.update("api", json.dumps({"key": key, "secret": secret}))
 
@@ -243,8 +235,8 @@ class Settings:
         js = json.loads(js_str)
         return js["key"], js["secret"]
     
-    def set_auth(self, cookies: Dict[str, str]):
-        self.update("auth", json.dumps(cookies))
+    def set_auth(self, login: str, password: str):
+        self.update("auth", json.dumps({"login": login, "password": password}))
     
     def get_auth(self) -> Optional[Dict[str, str]]:
         js_str = self.get("auth")
@@ -252,10 +244,14 @@ class Settings:
             return None
         return json.loads(js_str)
     
+    def get_login(self) -> Optional[str]:
+        auth = self.get_auth()
+        if auth is None:
+            return None
+        return auth["login"]
+    
     def set_compiler(self, compiler: Compiler):
-        js = {"debug": compiler.debug_command, "release": compiler.release_command}
-        js_str = json.dumps(js)
-        self.update("compiler", js_str)
+        self.update("compiler", json.dumps({"debug": compiler.debug_command, "release": compiler.release_command}))
     
     def get_compiler(self) -> Optional[Compiler]:
         js_str = self.get("compiler")
@@ -265,19 +261,13 @@ class Settings:
         return Compiler(js["debug"], js["release"])
     
     def set_codeforces_compiler(self, compiler: CodeforcesCompiler):
-        self.update("codeforces_compiler", str(compiler.value))
+        self.update("codeforces_compiler", compiler.value)
 
     def get_codeforces_compiler(self, required=False) -> Optional[CodeforcesCompiler]:
-        s = self.get("codeforces_compiler")
-        if s is None:
-            if required:
-                raise Error("Codeforces compiler not set")
-            return None
-        value = int(s)
-        for c in CodeforcesCompiler:
-            if value == c.value:
-                return c
-        raise Error(f"Codeforces compiler {value} no more supported")
+        value = self.get("codeforces_compiler")
+        if value is None and required:
+            raise Error("Codeforces compiler not set")
+        return CodeforcesCompiler(value)
     
     def set_exe_info(self, src_timestamp: int, release: bool):
         self.update("exe_info", json.dumps({"src_timestamp": src_timestamp, "release": release}))
@@ -316,7 +306,7 @@ class Api:
     instance: Optional["Api"] = None
 
     URL = "https://codeforces.com/api"
-    WAIT_INTERVAL = timedelta(seconds=2.25)
+    WAIT_INTERVAL = timedelta(seconds=3)
 
     @staticmethod
     def create_instance(*args, **kwargs):
@@ -380,59 +370,7 @@ class Api:
         sig = rnd + hashlib.sha512(sigstr.encode("utf-8"), usedforsecurity=True).hexdigest()
         params["apiSig"] = sig
         return params
-
-
-def print_c(color: str, *args, **kwargs):
-    assert color in ("green", "red", "blue", "cyan", "yellow", "white", "magenta")
-    color = getattr(colorama.Fore, color.upper())
-    print(color, colorama.Style.BRIGHT, sep="", end="")
-    print(*args, **kwargs)
-    print(colorama.Style.RESET_ALL, end="")
-
-
-def extract_csrf_token(response: requests.Response) -> str:
-    soup = bs4.BeautifulSoup(response.text, "lxml")
-    csrf_token_node = soup.find("meta", {"name": "X-Csrf-Token"})
-    if not csrf_token_node:
-        raise RequestError("csrf token not found", response)
-    return csrf_token_node.attrs["content"]
-
-
-def gen_post_data(response: requests.Response) -> dict:
-    result = {}
-    result["_tta"] = "176"
-    result["ftaa"] = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=18))
-    result["bfaa"] = "f1b3f18c715565b589b7823cda7448ce"
-    result["csrf_token"] = extract_csrf_token(response)
-    return result
-
-
-def create_session(cookies: Dict[str, str] = None) -> requests.Session:
-    session = requests.Session()
-    if cookies is not None:
-        session.cookies.update(cookies)
-    return session
-
-
-def check_lang_chooser(response: requests.Response):
-    if "<div class=\"lang-chooser\">" not in response.text:
-        raise RequestError("Received not a codeforces page", response)
-
-
-def input_and_test_compiler_cmd(compilation_type: str):
-    with open(SOURCE_FILE, "w") as f:
-        f.write("#include <iostream> \n int main(){ std::cout << 888 << std::endl; return 0; } \n ")
-    cmd = input(f"Compilation command ({compilation_type}): ")
-    cmd = cmd.strip().split(" ")
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-        out_txt = subprocess.run([EXECUTABLE_FILE], check=True, capture_output=True).stdout.decode("utf-8")
-    except (subprocess.SubprocessError, FileNotFoundError) as e:
-        raise Error(e) from None
-    if "888" not in out_txt:
-        raise Error("Compiler failed test")
-    return cmd
-
+    
 
 def send_request(method: str, url: str, *, params: dict = None, data: dict = None, session: requests.Session = None, timeout=None) -> requests.Response:
     assert method in ("GET", "POST")
@@ -455,88 +393,65 @@ def send_request(method: str, url: str, *, params: dict = None, data: dict = Non
     return response
     
 
-def request_auth(login: str, password: str) -> Dict[str, str]:
-    url = "https://codeforces.com/enter"
-    with requests.Session() as session:
-        response = send_request("GET", url, session=session)
-        check_lang_chooser(response)
-        data = {**gen_post_data(response), "action": "enter", "remember": "on", "handleOrEmail": login, "password": password}
-        response = send_request("POST", url, data=data, session=session)
-    check_lang_chooser(response)
-    if "Invalid handle/email or password" in response.text:
-        raise RequestError("Invalid login/password", response)
-    soup = bs4.BeautifulSoup(response.text, "lxml")
-    lang_chooser = soup.find("div", {"class": "lang-chooser"})
-    profile_ref = lang_chooser.find("a", {"href": re.compile(r"/profile/\w+")})
-    if profile_ref is None:
-        raise RequestError("Auth falied, no profile link", response)
-    return {k: v for k, v in session.cookies.iteritems()}
+def browser_send_request(request: dict) -> Any:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.connect(("localhost", BROWSER_PORT))
+    except ConnectionError as e:
+        raise Error("Cannot connect to the browser" + " " + str(e))
+    data = pickle.dumps(request)
+    sock.send(len(data).to_bytes(length=4, byteorder="little"))
+    sock.send(data)
+    length = int.from_bytes(sock.recv(4), byteorder="little")
+    data = sock.recv(length)
+    sock.close()
+    response = pickle.loads(data)
+    if isinstance(response, Exception):
+        raise Error(str(response))
+    return response
 
 
-def request_is_authorized(cookies: Dict[str, str]) -> bool:
-    url = f"https://codeforces.com"
-    with create_session(cookies) as session:
-        response = send_request("GET", url, session=session)
-    check_lang_chooser(response)
-    soup = bs4.BeautifulSoup(response.text, "lxml")
-    lang_chooser = soup.find("div", {"class": "lang-chooser"})
-    profile_ref = lang_chooser.find("a", {"href": re.compile(r"/profile/\w")})
-    return profile_ref is not None
+def browser_request_stop_browser() -> int:
+    request = {"cmd": "stop_browser"}
+    return browser_send_request(request)
 
 
-def request_submit_problem(contest_id: int, problem: str, cf_compiler: CodeforcesCompiler, code: str, cookies: Dict[str, str]):
-    url = f"https://codeforces.com/contest/{contest_id}/submit"
-    with create_session(cookies) as session:
-        response = send_request("GET", url, session=session)
-        check_lang_chooser(response)
-        soup = bs4.BeautifulSoup(response.text, "lxml")
-        if soup.find("select", {"name": "submittedProblemIndex"}) is None:
-            raise RequestError("Wrong submission page received", response)
-        data = {
-            **gen_post_data(response),
-            "tabSize": "4",
-            "sourceFile": "", 
-            "action": "submitSolutionFormSubmitted",
-            "programTypeId": str(cf_compiler.value),
-            "contestId": str(contest_id),
-            "submittedProblemIndex": problem,
-            "source": code
-        }
-        response = send_request("POST", url, data=data, session=session)
-    check_lang_chooser(response)
-    if "You have submitted exactly the same code before" in response.text:
-        raise Error("You have submitted exactly the same code before")
+def browser_request_participants_count(contest_id: int) -> int:
+    request = {"cmd": "participants_count", "contest_id": contest_id}
+    return browser_send_request(request)
 
 
-def request_sample_test(contest_id: int, problem: str, index: int) -> SampleTest:
-    url = f"https://codeforces.com/contest/{contest_id}/problem/{problem}"
-    response = send_request("GET", url)
-    check_lang_chooser(response)
-    soup = bs4.BeautifulSoup(response.text, "lxml")
-    sample_node = soup.find("div", {"class": "sample-test"})
-    if not sample_node:
-        raise RequestError("Sample block not found", response)
-    if index < 0 or index * 2 + 1 >= len(sample_node.contents):
-        raise RequestError("No such sample index", response)
-    input_block = sample_node.contents[2 * index].find("pre")
-    output_block = sample_node.contents[2 * index + 1].find("pre")
-    input_text = "\n".join(e.text.strip() for e in input_block.contents if len(e.text) > 0)
-    output_text = "\n".join(e.text.strip() for e in output_block.contents if len(e.text) > 0)
-    return SampleTest(input_text, output_text)
+def browser_request_submit_problem(contest_id: int, problem: str, code: str, cf_compiler: CodeforcesCompiler) -> int:
+    request = {"cmd": "submit_problem", "contest_id": contest_id, "problem": problem, "cf_compiler": cf_compiler.value, "code": code}
+    return browser_send_request(request)
 
 
-def request_participants_count(contest_id: int, unofficial: bool) -> int:
-    assert not unofficial, "Not supported"
-    url = f"https://codeforces.com/contest/{contest_id}/standings"
-    response = send_request("GET", url)
-    check_lang_chooser(response)
-    soup = bs4.BeautifulSoup(response.text, "lxml")
-    page_nodes = soup.find_all("a", {"href": re.compile(f"/contest/{contest_id}/standings/page/\\d+")})
-    last_page_text = page_nodes[-1].text
-    matches = re.findall(r"\d+", last_page_text)
-    if not matches:
-        raise RequestError("Unexpected last page tag text")
-    return int(matches[-1])
+def browser_request_sample_test(contest_id: int, problem: str, index: int) -> Tuple[str, str]:
+    request = {"cmd": "test_sample", "contest_id": contest_id, "problem": problem, "index": index}
+    return browser_send_request(request)
+
+
+def input_and_test_compiler_cmd(compilation_type: str):
+    with open(SOURCE_FILE, "w") as f:
+        f.write("#include <iostream> \n int main(){ std::cout << 888 << std::endl; return 0; } \n ")
+    cmd = input(f"Compilation command ({compilation_type}): ")
+    cmd = cmd.strip().split(" ")
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        out_txt = subprocess.run([EXECUTABLE_FILE], check=True, capture_output=True).stdout.decode("utf-8")
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        raise Error(e) from None
+    if "888" not in out_txt:
+        raise Error("Compiler failed test")
+    return cmd
+
+
+def print_c(color: str, *args, **kwargs):
+    assert color in ("green", "red", "blue", "cyan", "yellow", "white", "magenta")
+    color = getattr(colorama.Fore, color.upper())
+    print(color, colorama.Style.BRIGHT, sep="", end="")
+    print(*args, **kwargs)
+    print(colorama.Style.RESET_ALL, end="")
 
 
 def default_checker(_i: str, out_content: str, expected_content: str) -> Optional[str]:
@@ -614,6 +529,12 @@ def work_execute(args):
     end = datetime.now(timezone.utc)
     milliseconds = int(1000 * (end - begin).total_seconds())
     print_c("white", f"{milliseconds} ms")
+    if args.input:
+        with open(INPUT_FILE, "r") as f:
+            content = f.read().split("\n")
+        print_c("white", "Input:")
+        for line in content:
+            print(" " * 4, line, sep="")
     if args.output:
         with open(OUTPUT_FILE, "r") as f:
             content = f.read().split("\n")
@@ -685,7 +606,9 @@ def work_gendbg_solution(args):
         os.rename(OUTPUT_FILE, EXPECTED_FILE)
         err = compare()
         if err:
-            print_c("green", "\nTest generated!")
+            print()
+            print_c("white", "Error:", err)
+            print_c("green", "Test generated!")
             return
         if counter == 250:
             per_test_ms = 1000 * (datetime.now(timezone.utc) - start).total_seconds() / counter
@@ -699,11 +622,11 @@ def work_request_sample(args):
     problem = Settings.instance.get_problem()
     if problem is None:
         raise Error("Problem not selected")
-    sample = request_sample_test(contest, problem, args.sample - 1)
+    sample = browser_request_sample_test(contest, problem, args.sample - 1)
     with open(INPUT_FILE, "w") as f:
-        f.write(sample.input)
+        f.write(sample[0])
     with open(EXPECTED_FILE, "w") as f:
-        f.write(sample.output)
+        f.write(sample[1])
 
 
 def work_submit_solution(args):
@@ -718,28 +641,29 @@ def work_submit_solution(args):
     cf_compiler = Settings.instance.get_codeforces_compiler()
     if cf_compiler is None:
         raise Error("Codeforces compiler not set")
-    cookies = Settings.instance.get_auth()
-    if cookies is None:
-        raise Error("Not authorized")
+    login = Settings.instance.get_login()
+    if login is None:
+        raise Error("Login not set")
     with open(SOURCE_FILE, "r") as f:
         code = f.read()
     request_time = datetime.now(timezone.utc)
     print("submitting...")
-    request_submit_problem(contest, problem, cf_compiler, code, cookies)
+    browser_request_submit_problem(contest, problem, code, cf_compiler)
     print("solution submitted")
-    login = Settings.instance.get_login()
-    prev_tests_passed = -1
     while True:
         sub = Api.instance.request_last_submission(login, contest)
         sub_time = datetime.fromtimestamp(sub.creation_timestamp, timezone.utc)
         if sub_time < request_time:
             print("Getting submission status...")
-            continue
-        if sub.tests_passed == prev_tests_passed:
-            continue
-        prev_tests_passed = sub.tests_passed
-        print_c("yellow", f"Testing... {sub.tests_passed + 1}")
+        else:
+            break
+    prev_tests_passed = -1
+    while True:
+        sub = Api.instance.request_last_submission(login, contest)
         if sub.verdict is None or sub.verdict == "TESTING":
+            if sub.tests_passed != prev_tests_passed:
+                prev_tests_passed = sub.tests_passed
+                print_c("yellow", f"Testing... {sub.tests_passed + 1}")
             continue
         break
     if sub.verdict != "OK":
@@ -801,18 +725,18 @@ def work_rank(args):
     contest = Settings.instance.get_contest()
     if contest is None:
         raise Error("Contest not selected")
-    login = Settings.instance.get_login()
+    login = Settings.instance.get_login() if args.rank == "#" else args.rank
     if login is None:
         raise Error("Login not set")
-    pcount = request_participants_count(Settings.instance.get_contest(), unofficial=False)
-    rank = Api.instance.request_rank(contest, login, unofficial=False)
+    pcount = browser_request_participants_count(Settings.instance.get_contest())
+    rank = Api.instance.request_rank(contest, login, unofficial=True)
+    color_map = [(1.0, "red"), (3.0, "yellow"), (6.0, "magenta"), (15.0, "blue"), (27.0, "cyan"), (45.0, "green")]
     percent = 100.0 * rank / pcount
-    if percent <= 1.0:
-        color = "red"
-    elif percent <= 3.0:
-        color = "yellow"
-    else:
-        color = ["blue", "cyan", "green", *(["white"] * 20)][int(percent) // 10]
+    color = "white"
+    for p, c in color_map:
+        if percent <= p:
+            color = c
+            break
     print_c("white", f"{rank}", end=" / ")
     print_c(color, f"{percent:.2f}%")
     print_c("white", f"{pcount}")
@@ -828,18 +752,8 @@ def work_set_api(args):
 def work_set_auth(args):
     login = input("Login: ")
     password = input("Password: ")
-    cookies = request_auth(login, password)
-    Settings.instance.set_login(login)
-    Settings.instance.set_auth(cookies)
+    Settings.instance.set_auth(login, password)
     print_c("blue", "Auth settings saved")
-
-
-def work_check_auth(args):
-    cookies = Settings.instance.get_auth()
-    if cookies is None:
-        print("Not authorized")
-        return
-    print(request_is_authorized(cookies))
 
 
 def work_set_compiler(args):
@@ -893,11 +807,40 @@ def work_show_settings(args):
         print("Compile (release):", functools.reduce(lambda r, e: f"{r} {e}", compiler.release_command, ""))
 
 
-def do_work(args: Namespace):
+def work_start_browser(args):
+    auth = Settings.instance.get_auth()
+    if auth is None:
+        raise Error("Auth not set")
+    login, password = auth.values()
+    subprocess.run([sys.executable, "-m", "venv", "--copies", "./browser_venv"], check=True, capture_output=True)
+    python = str(Path("./browser_venv/bin/python").resolve().absolute())
+    subprocess.run([python, "-m", "pip", "install", "-r", "browser_requirements.txt"], check=True, capture_output=True)
+    browser_cmd = [python, "cf_browser.py", "-l", login, "-p", password]
+    if args.start_browser.upper() == "W":
+        browser_cmd.append("-w")
+    subprocess.Popen(browser_cmd, cwd=".", close_fds=True, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print_c("white", "Started")
+
+
+def work_stop_browser(args):
+    try:
+        browser_request_stop_browser()
+    except ConnectionError:
+        print_c("white", "Not running")
+    else:
+        print_c("white", "Stopped")
+
+def do_work(args):
     Problem.import_all()
     Settings.create_instance()
     if api := Settings.instance.get_api():
         Api.create_instance(api[0], api[1])
+    if args.start_browser is not None:
+        work_start_browser(args)
+        return
+    if args.stop_browser:
+        work_stop_browser(args)
+        return
     if args.settings:
         work_show_settings(args)
         return
@@ -906,9 +849,6 @@ def do_work(args: Namespace):
         return
     if args.set_auth:
         work_set_auth(args)
-        return
-    if args.check_auth:
-        work_check_auth(args)
         return
     if args.set_api:
         work_set_api(args)
@@ -919,7 +859,7 @@ def do_work(args: Namespace):
     if args.contest is not None:
         work_set_contest(args)
         return
-    if args.rank:
+    if args.rank is not None:
         work_rank(args)
         return
     if args.problem is not None:
@@ -934,10 +874,13 @@ def do_work(args: Namespace):
         work_compile(args)
     if args.execute:
         work_execute(args)
+        return
     if args.compare:
         work_compare()
+        return
     if args.compare_solution:
         work_compare_solution()
+        return
     if args.gendbg_input:
         work_gendbg_input(args)
         return
@@ -952,29 +895,31 @@ def do_work(args: Namespace):
         return
 
 
-def parse_args() -> Namespace:
-    argparser = ArgumentParser("cf.py", formatter_class=lambda prog: HelpFormatter(prog, max_help_position=35))
+def parse_args() -> argparse.Namespace:
+    argparser = argparse.ArgumentParser("cf.py", formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=35))
     argparser.add_argument("-b", "--build", action="store_true", help="Build executable")
     argparser.add_argument("-r", "--release", action="store_true", help="Build release")
     argparser.add_argument("-e", "--execute", action="store_true", help="Run code")
     argparser.add_argument("-c", "--compare", action="store_true", help="Compare output with correct one (call checker)")
+    argparser.add_argument("-i", "--input", action="store_true", help="Show input file on execution")
+    argparser.add_argument("-o", "--output", action="store_true", help="Show output after execution")
     argparser.add_argument("-p", "--problem", type=str, metavar="P", help="Select problem")
     argparser.add_argument("-s", "--submit", action="store_true", help="Submit current problem")
     argparser.add_argument("-t", "--sample", type=int, metavar="I", help="Get test sample")
-    argparser.add_argument("-q", "--rank", action="store_true", help="Show rank for current contest")
+    argparser.add_argument("-q", "--rank", type=str, nargs="?", default=None, const="#", metavar="USER", help="Show rank for current contest")
     argparser.add_argument("-w", "--settings", action="store_true", help="Show current settings")
-    argparser.add_argument("-o", "--output", action="store_true", help="Show output after execution")
     argparser.add_argument("--compare-solution", action="store_true", help="Compare solution with correct one on current input")
     argparser.add_argument("--gendbg-input", action="store_true", help="Generate input and run once")
     argparser.add_argument("--gendbg-runtime", action="store_true", help="Test solution for runtime error")
     argparser.add_argument("--gendbg-checker", action="store_true", help="Test solution with a checker")
     argparser.add_argument("--gendbg-solution", action="store_true", help="Test solution with correct one")
     argparser.add_argument("--contest", type=int, nargs="?", default=None, const=0, metavar="ID", help="Select contest")
-    argparser.add_argument("--check-auth", action="store_true", help="Check authorization")
-    argparser.add_argument("--set-auth", action="store_true", help="Authorize at codeforces")
+    argparser.add_argument("--set-auth", action="store_true", help="Set login/password")
     argparser.add_argument("--set-api", action="store_true", help="Set API key/secret")
     argparser.add_argument("--set-compiler", action="store_true", help="Set compilation command")
     argparser.add_argument("--set-codeforces-compiler", action="store_true", help="Set compiler for submissions")
+    argparser.add_argument("--start-browser", type=str, nargs="?", default=None, const="#", help="Start browser service (W for window)")
+    argparser.add_argument("--stop-browser", action="store_true", help="Stop browser service")
     return argparser.parse_args()
     
 
