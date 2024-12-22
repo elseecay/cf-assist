@@ -15,6 +15,7 @@ import os
 import socket
 import re
 import logging
+import tempfile
 
 from contextlib import closing
 from pathlib import Path
@@ -141,6 +142,10 @@ def handle_submit_problem(request: dict) -> int:
     contest_id = request["contest_id"]
     problem = request["problem"]
     cf_compiler = request["cf_compiler"]
+    code = request["code"]
+    file_path = tempfile.mktemp()
+    with open(file_path, "w") as f:
+        f.write(code)
     open_page(f"https://codeforces.com/contest/{contest_id}/submit")
     wait_complete()
     wait_element(By.ID, "singlePageSubmitButton")
@@ -151,7 +156,7 @@ def handle_submit_problem(request: dict) -> int:
     select = Select(tag)
     select.select_by_value(cf_compiler)
     tag = driver.find_element(By.NAME, "sourceFile")
-    tag.send_keys(str(Path("main.cpp").resolve().absolute()))
+    tag.send_keys(file_path)
     button = driver.find_element(By.ID, "singlePageSubmitButton")
     button_enabled = lambda _: driver.execute_script("return document.getElementById(\"singlePageSubmitButton\").disabled == false;")
     WebDriverWait(driver, 30).until(button_enabled)
