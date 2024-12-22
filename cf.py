@@ -647,9 +647,9 @@ def work_submit_solution(args):
     with open(SOURCE_FILE, "r") as f:
         code = f.read()
     request_time = datetime.now(timezone.utc)
-    print("submitting...")
+    print_c("white", f"{contest}{problem} submitting...")
     browser_request_submit_problem(contest, problem, code, cf_compiler)
-    print("solution submitted")
+    print("white", "solution submitted")
     while True:
         sub = Api.instance.request_last_submission(login, contest)
         sub_time = datetime.fromtimestamp(sub.creation_timestamp, timezone.utc)

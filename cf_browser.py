@@ -142,7 +142,7 @@ def handle_submit_problem(request: dict) -> int:
     contest_id = request["contest_id"]
     problem = request["problem"]
     cf_compiler = request["cf_compiler"]
-    code = request["code"]
+    code = f"// Submitted with https://github.com/elseecay/cf-assist\n\n\n{request["code"]}"
     file_path = tempfile.mktemp()
     with open(file_path, "w") as f:
         f.write(code)
@@ -201,12 +201,12 @@ def enter(login: str, password: str) -> bool:
     button.click()
     sleep(1)
     wait_complete()
-    open_page(f"https://codeforces.com/profile/{login}")
+    open_page(f"https://codeforces.com")
     try:
-        driver.find_element(By.XPATH, "//*[@href='/register']")
+        driver.find_element(By.CLASS_NAME, "personal-sidebar")
     except NoSuchElementException:
-        return True
-    return False
+        return False
+    return True
 
 
 def open_page(url: str):
