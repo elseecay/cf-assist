@@ -97,6 +97,19 @@ class Submission:
     mem_mb: Optional[int] = None
 
 
+@dataclass
+class User:
+    handle: str
+    rating: int
+    max_rating: int
+
+
+@dataclass
+class Contestant:
+    handle: str
+    place: int
+
+
 class CodeforcesCompiler(StrEnum):
     GPP17 = "54"
     GPP20 = "89"
@@ -333,15 +346,27 @@ class Api:
             result.mem_mb = sub["memoryConsumedBytes"] // 1024 // 1024
         return result
 
-    def request_rank(self, contest_id: int, login: str, unofficial: bool) -> int:
-        params = {"contestId": str(contest_id), "handles": f"{login};"}
-        if unofficial:
-            params["showUnofficial"] = "true"
+    def request_rank(self, contest_id: int, login: str) -> int:
+        params = {"contestId": str(contest_id), "handles": f"{login};", "showUnofficial": "true"}
         r, prepared = self.request("contest.standings", params)
         if len(r["rows"]) == 0:
             raise RequestError("Standings, len(rows) == 0", prepared)
         return int(r["rows"][0]["rank"])
-    
+
+    def request_users(self, contest_id: int) -> List[User]:
+        params = {"contestId": str(contest_id), "activeOnly": "false", "includeRetired": "false"}
+        r, prepared = self.request("user.ratedList", params)
+        if len(r) == 0:
+            raise RequestError("Users, len == 0", prepared)
+        return list(User(e["handle"], e["rating"], e["maxRating"]) for e in r)
+
+    def request_standings(self, contest_id: int, from_place: int, count: int) -> List[Contestant]:
+        params = {"contestId": str(contest_id), "showUnofficial": "true", "from": str(from_place), "count": str(count)}
+        r, prepared = self.request("contest.standings", params)
+        if len(r["rows"]) == 0:
+            raise RequestError("Standings, len(rows) == 0", prepared)
+        return list(Contestant(e["party"]["members"][0]["handle"], e["rank"]) for e in r["rows"])
+        
     def request(self, method_name: str, params: Dict[str, str]) -> Tuple[Any, requests.PreparedRequest]:
         next_request_time = self.last_request_time + Api.WAIT_INTERVAL
         now = datetime.now(timezone.utc)
@@ -729,10 +754,9 @@ def work_rank(args):
     if login is None:
         raise Error("Login not set")
     pcount = browser_request_participants_count(Settings.instance.get_contest())
-    rank = Api.instance.request_rank(contest, login, unofficial=True)
-    color_map = [(1.0, "red"), (3.0, "yellow"), (6.0, "magenta"), (15.0, "blue"), (27.0, "cyan"), (45.0, "green")]
+    rank = Api.instance.request_rank(contest, login)
     percent = 100.0 * rank / pcount
-    color = "white"
+    color_map = [(1.0, "red"), (3.0, "yellow"), (6.0, "magenta"), (15.0, "blue"), (27.0, "cyan"), (45.0, "green"), (101.0, "white")]
     for p, c in color_map:
         if percent <= p:
             color = c
@@ -740,6 +764,38 @@ def work_rank(args):
     print_c("white", f"{rank}", end=" / ")
     print_c(color, f"{percent:.2f}%")
     print_c("white", f"{pcount}")
+
+
+def work_predict(args):
+    if Api.instance is None:
+        raise Error("API not set")
+    contest = Settings.instance.get_contest()
+    if contest is None:
+        raise Error("Contest not set")
+    login = Settings.instance.get_login()
+    if login is None:
+        raise Error("Login not set")
+    rating_map = {e.handle: e.rating for e in Api.instance.request_users(contest)}
+    login_place = Api.instance.request_rank(contest, login)
+    near_contestants = Api.instance.request_standings(contest, login_place - 100, 200)
+    rating_sum, used = 0, 0
+    for contestant in near_contestants:
+        if contestant.handle in rating_map:
+            rating_sum += rating_map[contestant.handle]
+            used += 1
+    perfomance = rating_sum // used
+    delta = (perfomance - rating_map[login]) // 4
+    color = [(1199, "white"), (1399, "green"), (1599, "cyan"), (1899, "blue"), (2099, "magenta"), (2399, "yellow"), (5000, "red")]
+    for r, c in color:
+        if perfomance <= r:
+            print_c("white", "Perfomance:", end=" ")
+            print_c(c, perfomance)
+            break
+    delta_color = "green" if delta > 0 else ("red" if delta < 0 else "white")
+    print_c("white", "Delta:", end=" ")
+    if delta > 0:
+        delta = "+" + str(delta)
+    print_c(delta_color, delta)
     
 
 def work_set_api(args):
@@ -862,6 +918,9 @@ def do_work(args):
     if args.rank is not None:
         work_rank(args)
         return
+    if args.predict:
+        work_predict(args)
+        return
     if args.problem is not None:
         work_set_problem(args)
     if args.submit:
@@ -914,6 +973,7 @@ def parse_args() -> argparse.Namespace:
     argparser.add_argument("--gendbg-checker", action="store_true", help="Test solution with a checker")
     argparser.add_argument("--gendbg-solution", action="store_true", help="Test solution with correct one")
     argparser.add_argument("--contest", type=int, nargs="?", default=None, const=0, metavar="ID", help="Select contest")
+    argparser.add_argument("--predict", action="store_true", help="Predict rating delta")
     argparser.add_argument("--set-auth", action="store_true", help="Set login/password")
     argparser.add_argument("--set-api", action="store_true", help="Set API key/secret")
     argparser.add_argument("--set-compiler", action="store_true", help="Set compilation command")
